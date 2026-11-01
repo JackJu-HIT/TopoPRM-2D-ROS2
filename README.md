@@ -187,7 +187,7 @@ ros2 run topoprm_2d motion_plan --ros-args \
 
 作者：**鞠柏贤**。
 
-- 微信公众号：**机器人规划与控制研究所**。[相关技术文章](https://mp.weixin.qq.com/s/tjHMyyEMzsonYaVbrq4WTQ)
+- 微信公众号：**机器人规划与控制研究所**。[相关技术文章](https://mp.weixin.qq.com/s/MLHtW-vXelH-ljNn2hDdLA)
 - Bilibili：**机器人算法研究所**。[原项目演示视频](https://www.bilibili.com/video/BV11RUfB8ELb/)
 
 以上链接沿用基础项目资料，不代表本项目的性能验证记录。
