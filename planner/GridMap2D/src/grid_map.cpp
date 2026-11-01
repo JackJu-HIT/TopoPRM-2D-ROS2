@@ -55,13 +55,6 @@ void GridMap2D::setInflateRadius(double radius) {
     rebuildOffsets();
     inflate();
 }
-void GridMap2D::setDoubleCircleOffsets(double front_offset, double rear_offset) {
-    if (!std::isfinite(front_offset) || front_offset < 0 ||
-        !std::isfinite(rear_offset) || rear_offset < 0)
-        throw std::invalid_argument("Circle offsets must be finite and nonnegative");
-    front_circle_offset_ = front_offset;
-    rear_circle_offset_ = rear_offset;
-}
 void GridMap2D::rebuildOffsets() {
     inflation_offsets_.clear();
     const int steps = static_cast<int>(std::ceil(inflate_radius_ / resolution_)) + 1;
@@ -110,24 +103,8 @@ GridMap2D::CellState GridMap2D::queryInflated(const Eigen::Vector2d& p) const {
         (local.array() + inflate_radius_ >= size.array()).any()) return CellState::kOutOfMap;
     return query(p, inflated_);
 }
-GridMap2D::CellState GridMap2D::queryDoubleCircle(const Eigen::Vector2d& world_position, double yaw) const {
-    if (!std::isfinite(yaw)) return CellState::kOutOfMap;
-    const Eigen::Vector2d heading(std::cos(yaw), std::sin(yaw));
-    const Eigen::Vector2d front = world_position + front_circle_offset_ * heading;
-    const Eigen::Vector2d rear = world_position - rear_circle_offset_ * heading;
-    // std::cout << "GridMap2D::queryDoubleCircle front = " << front << " rear = " << rear << std::endl;
-    // 与 SCAN 一致：先查询前圆，前圆空闲时再查询后圆。
-    const CellState front_state = queryInflated(front);
-    if (front_state != CellState::kFree) {
-        return front_state;
-    }
-    return queryInflated(rear);
-}
 bool GridMap2D::isObstacle(const Eigen::Vector2d& p) const { return queryRaw(p) != CellState::kFree; }
 bool GridMap2D::getInflateOccupancy(const Eigen::Vector2d& p) const { return queryInflated(p) != CellState::kFree; }
-bool GridMap2D::getInflateOccupancy(const Eigen::Vector2d& p, double yaw) const {
-    return queryDoubleCircle(p, yaw) != CellState::kFree;
-}
 std::vector<Eigen::Vector2d> GridMap2D::getObstaclePointCloud(bool inflated) const {
     std::vector<Eigen::Vector2d> points;
     const auto& buffer = inflated ? inflated_ : raw_;

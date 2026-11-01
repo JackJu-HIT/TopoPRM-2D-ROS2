@@ -12,11 +12,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rviz_config',
             default_value=PathJoinSubstitution([
-                FindPackageShare('ego_planner'), 'rviz.rviz',
+                FindPackageShare('topoprm_2d'), 'rviz.rviz',
             ]),
             description='Path to the RViz configuration file',
         ),
-        Node(package='ego_planner', executable='motion_plan', output='screen'),
+        Node(package='topoprm_2d', executable='motion_plan', output='screen'),
         Node(
             package='rviz2',
             executable='rviz2',

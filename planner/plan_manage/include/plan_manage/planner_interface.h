@@ -1,111 +1,58 @@
-/*
- * @Function:Ego Planner:Trajectory Optimize Base Bspline
- * @Create by:juchunyu@qq.com
- * @Date:2025-08-02 17:40:01
- */
+#ifndef KINODYNAMIC_ASTAR_PLANNER_INTERFACE_H_
+#define KINODYNAMIC_ASTAR_PLANNER_INTERFACE_H_
 
-#ifndef _PLANNER_INTERFACE_H_
-#define _PLANNER_INTERFACE_H_
+#include <memory>
+#include <vector>
 
-#include <stdlib.h>
-
-#include <bspline_opt/bspline_optimizer.h>
-#include <bspline_opt/uniform_bspline.h>
+#include <Eigen/Core>
+#include <path_searching/kinodynamic_astar.h>
 #include <plan_env/grid_map.h>
-#include <plan_manage/plan_container.hpp>
-#include "Bspline.h"
-#include <chrono>
 
+namespace topoprm_2d_ros {
 
-namespace  ego_planner
-{
-    struct PathPoint
-    {
-        float x;
-        float y;
-        float z;
-        float v;
-        float theta;
-    };
+struct PathPoint {
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
+  float v = 0.0F;
+  float theta = 0.0F;
+};
 
-    struct ObstacleInfo
-    {
-        float x;
-        float y;
-        float z;
-    };
+struct ObstacleInfo {
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
+};
 
-    class PlannerInterface
-    {
-           
-            EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+class PlannerInterface {
+ public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-            bool reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
-                                                Eigen::Vector3d start_acc, Eigen::Vector3d local_target_pt,
-                                                Eigen::Vector3d local_target_vel,vector<Eigen::Vector3d> point_set);
-            PlanParameters pp_;
-            LocalTrajData local_data_;
-            shared_ptr<GridMap2D> grid_map_;
-            PathPoint  cur_pose_;
+  void initParam(double max_vel, double max_acc);
+  void initMap(double x_size, double y_size, double resolution,
+               double inflate_values);
+  void setPathPoint(const std::vector<PathPoint>& plan_traj);
+  void setObstacles(const std::vector<ObstacleInfo>& obstacles);
+  void setCurrentVehiclePos(const PathPoint& cur_pose);
+  void setGridMap(const PathPoint& cur_pose);
+  void makePlan();
+  void getLocalPlanTrajResults(std::vector<PathPoint>& plan_traj_results) const;
+  void getObstacles(std::vector<ObstacleInfo>& obstacles) const;
+  void getSearchPath(std::vector<std::vector<Eigen::Vector2d>>& paths) const;
 
-        private:
+ private:
+  double max_vel_ = 2.0;
+  double max_acc_ = 3.0;
+  double resolution_ = 0.1;
+  std::shared_ptr<GridMap2D> grid_map_;
+  PathPoint cur_pose_;
+  std::vector<PathPoint> global_plan_traj_;
+  std::vector<PathPoint> plan_traj_results_;
+  std::vector<std::vector<Eigen::Vector2d>> search_paths_;
+  fast_planner::KinodynamicAstar::Ptr planner_;
+  fast_planner::EDTEnvironment::Ptr kino_environment_;
+};
 
-            BsplineOptimizer::Ptr bspline_optimizer_rebound_;
+}  // namespace topoprm_2d_ros
 
-            int continous_failures_count_{0};
-
-            void updateTrajInfo(const UniformBspline &position_traj);
-
-            void reparamBspline(UniformBspline &bspline, vector<Eigen::Vector3d> &start_end_derivative, double ratio, Eigen::MatrixXd &ctrl_pts, double &dt,
-                            double &time_inc);
-
-            bool refineTrajAlgo(UniformBspline &traj, vector<Eigen::Vector3d> &start_end_derivative, double ratio, double &ts, Eigen::MatrixXd &optimal_control_points);
-   
-            
-        private:
-
-           
-            std::vector<PathPoint> _global_plan_traj_;
-            std::vector<PathPoint> _plan_traj_results_;
-            vector<vector<Eigen::Vector2d>> a_star_pathes_;
-
-
-
-        public:
-            PlannerInterface();
-
-            ~PlannerInterface();
-
-            void initParam(double max_vel,double max_acc,double max_jerk);
-
-            void initEsdfMap(double x_size,double y_size,double z_size,double resolution, Eigen::Vector3d org,double inflate_values);
-
-            void setCurvatureParams(double max_curvature, double weight);
-
-            void setDoubleCircleFootprint(double radius, double front_offset, double rear_offset);
-
-            void setPathPoint(std::vector<PathPoint> &plan_traj);
-
-            void setObstacles(std::vector<ObstacleInfo> &obstacle);
-
-            void setCurrentVehiclePos(PathPoint& cur_pose);
-
-            void makePlan();
-
-            void getLocalPlanTrajResults(std::vector<PathPoint> &plan_traj_results);  
-
-            void getObstacles(std::vector<ObstacleInfo> &obstacle);
-
-            void getTraj();
-
-            void setGridMap(PathPoint& cur_pose);
-
-            void getAStarPath(vector<vector<Eigen::Vector2d>>& a_star_path);
-
-    };
-
-
-}
-
-
-#endif
+#endif  // KINODYNAMIC_ASTAR_PLANNER_INTERFACE_H_

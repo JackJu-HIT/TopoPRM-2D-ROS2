@@ -29,16 +29,13 @@ public:
     void inflateObstacles(double radius);
     void inflate() { inflateObstacles(inflate_radius_); }
     void setInflateRadius(double radius);
-    void setDoubleCircleOffsets(double front_offset, double rear_offset);
     double circleRadius() const { return inflate_radius_; }
     CellState queryRaw(const Eigen::Vector2d& position) const;
     CellState queryInflated(const Eigen::Vector2d& position) const;
-    CellState queryDoubleCircle(const Eigen::Vector2d& position, double yaw) const;
     // Out-of-map and invalid queries are occupied (fail closed).
     bool isObstacle(const Eigen::Vector2d& position) const;
-    // Single circle-centre query for the geometric A* guide.
+    // Single-circle collision query at the vehicle reference point.
     bool getInflateOccupancy(const Eigen::Vector2d& position) const;
-    bool getInflateOccupancy(const Eigen::Vector2d& position, double yaw) const;
     Eigen::Vector2i worldToGrid(const Eigen::Vector2d& position) const;
     Eigen::Vector2d gridToWorld(const Eigen::Vector2i& index) const;
     bool isIndexValid(const Eigen::Vector2i& index) const;
@@ -53,8 +50,6 @@ private:
     void rebuildOffsets();
     double resolution_;
     double inflate_radius_ = 0.5;
-    double front_circle_offset_ = 0.5;
-    double rear_circle_offset_ = 0.5;
     Eigen::Vector2i world_size_;
     Eigen::Vector2i map_size_ = Eigen::Vector2i::Zero();
     Eigen::Vector2d origin_ = Eigen::Vector2d::Zero();

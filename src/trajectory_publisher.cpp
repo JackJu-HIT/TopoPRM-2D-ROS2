@@ -1,47 +1,32 @@
 /*
- * @Function: Ego Planner + RViz Interactive Input (Global Path + Obstacles)
+ * @Function: TopoPRM + RViz Interactive Input (Global Path + Obstacles)
  * @Create by: juchunyu@qq.com
  * @Date: 2025-11-01 18:58:01
  */
 #include "trajectory_obstacles_publisher.h"
+#include <chrono>
 #include <tf2/utils.h>
 #include "geometry_msgs/msg/quaternion.hpp"  // 确保包含四元数消息类型
 
 TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher() 
-    : Node("ego_planner_interactive_node"),
+    : Node("topoprm_2d_interactive_node"),
       has_valid_global_path_(false),
       has_obstacles_(false),
-      should_plan_(false),
       needs_replan_(false)
 {
     // 1. 创建发布者（可视化用）
     global_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("visual_global_path", 10);
-    // a_star_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("visual_astar_path", 10);
-    a_star_path_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("trajectories", 10);
+    search_path_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("trajectories", 10);
     local_traj_pub_ = this->create_publisher<nav_msgs::msg::Path>("visual_local_trajectory", 10);
     obs_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("visual_obstacles", 10);
     obs_local_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("visual_local_obstacles", 10);
 
     // 2. 创建订阅者（接收RViz下发的数据）
-    // 全局路径输入方式1：直接发布Path消息
-    // rviz_global_path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-    //     "/rviz_input_global_path",
-    //     10,
-    //     std::bind(&TrajectoryAndObstaclesPublisher::rviz_global_path_callback, this, std::placeholders::_1)
-    // );
-
     goal_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
         "/goal_pose",
         10,
         std::bind(&TrajectoryAndObstaclesPublisher::goal_pose_callback, this, std::placeholders::_1)
     );
-
-    // // 障碍物输入方式1：发布PointCloud2消息
-    // rviz_obstacles_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-    //     "/rviz_input_obstacles",
-    //     10,
-    //     std::bind(&TrajectoryAndObstaclesPublisher::rviz_obstacles_callback, this, std::placeholders::_1)
-    // );
 
     // 路径添加：使用Publish Point工具逐个添加
     rviz_point_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
@@ -57,33 +42,21 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
         std::bind(&TrajectoryAndObstaclesPublisher::pose_estimate_callback, this, std::placeholders::_1)
     );
 
-    // 3. 触发规划的话题
-    trigger_plan_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-        "/trigger_plan",
-        10,
-        std::bind(&TrajectoryAndObstaclesPublisher::trigger_plan_callback, this, std::placeholders::_1)
-    );
+    // 3. Initialize the planner
+    init_planner();
 
-    // 4. 初始化Ego Planner基础配置
-    init_ego_planner_base();
-
-    // 5. 定时器：5Hz触发规划与发布
+    // 4. 5 Hz planning and visualization timer
     timer_ = this->create_wall_timer(
         std::chrono::milliseconds(200),
         std::bind(&TrajectoryAndObstaclesPublisher::publish_and_plan, this)
     );
 
-    RCLCPP_INFO(this->get_logger(), "Interactive Ego Planner Node Ready!");
+    RCLCPP_INFO(this->get_logger(), "TopoPRM planner node ready.");
     RCLCPP_INFO(this->get_logger(), "=== 使用方法 ===");
     RCLCPP_INFO(this->get_logger(), "1. 添加全局路径：使用2D Nav Goal工具设置终点");
     RCLCPP_INFO(this->get_logger(), "2. 添加障碍物（三种方法任选）：");
     RCLCPP_INFO(this->get_logger(), "   - 方法A：使用Publish Point工具点击地图");
     RCLCPP_INFO(this->get_logger(), "   - 方法B：使用2D Pose Estimate工具点击Grid任意位置（推荐）");
-    RCLCPP_INFO(this->get_logger(), "   - 方法C：发布PointCloud2到 /rviz_input_obstacles");
-    RCLCPP_INFO(this->get_logger(), "3. 触发规划：ros2 topic pub /trigger_plan std_msgs/Bool \"{data: true}\"");
-    RCLCPP_INFO(this->get_logger(), "4. 停止规划：ros2 topic pub /trigger_plan std_msgs/Bool \"{data: false}\"");
-    RCLCPP_INFO(this->get_logger(), "5. 支持多次规划：可以反复发送true/false控制规划");
-    RCLCPP_INFO(this->get_logger(), "");
     RCLCPP_INFO(this->get_logger(), "=== RViz2设置步骤 ===");
     RCLCPP_INFO(this->get_logger(), "1. 添加Grid显示");
     RCLCPP_INFO(this->get_logger(), "2. 添加2D Nav Goal工具（话题：/goal_pose）");
@@ -93,22 +66,13 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
     RCLCPP_INFO(this->get_logger(), "6. 添加Path显示（话题：/visual_global_path和/visual_local_trajectory）");
 }
 
-// 初始化Ego Planner基础参数
-void TrajectoryAndObstaclesPublisher::init_ego_planner_base()
+// Initialize planner parameters
+void TrajectoryAndObstaclesPublisher::init_planner()
 {
     const double circle_radius = declare_parameter<double>("vehicle.circle_radius", map_inflate_value_);
-    const double front_offset = declare_parameter<double>("vehicle.front_circle_offset", 0.5);
-    const double rear_offset = declare_parameter<double>("vehicle.rear_circle_offset", 0.5);
-    ego_planner_ = std::make_shared<PlannerInterface>();
-    ego_planner_->initParam(max_vel_, max_acc_, max_jerk_);
-    ego_planner_->initEsdfMap(
-        map_x_size_, map_y_size_, map_z_size_,
-        map_resolution_, map_origin_, map_inflate_value_
-    );
-    ego_planner_->setDoubleCircleFootprint(circle_radius, front_offset, rear_offset);
-    const double max_curvature = declare_parameter<double>("optimization.max_curvature", 2.0);
-    const double curvature_weight = declare_parameter<double>("optimization.curvature_weight", 0.1);
-    ego_planner_->setCurvatureParams(max_curvature, curvature_weight);
+    planner_ = std::make_shared<PlannerInterface>();
+    planner_->initParam(max_vel_, max_acc_);
+    planner_->initMap(map_x_size_, map_y_size_, map_resolution_, circle_radius);
 }
 
 // 统一添加障碍物函数
@@ -124,11 +88,7 @@ void TrajectoryAndObstaclesPublisher::add_obstacle_at_position(double x, double 
     obstacles_.push_back(obs);
     has_obstacles_ = true;
     
-    // 如果有障碍物更新且正在规划中，则标记需要重新规划
-    if (should_plan_) {
-        needs_replan_ = true;
-        RCLCPP_INFO(this->get_logger(), "障碍物更新，已标记需要重新规划");
-    }
+    if (has_current_pose_ && has_valid_global_path_) needs_replan_ = true;
     
     RCLCPP_INFO(this->get_logger(), "添加障碍物: (%.2f, %.2f), 总障碍物数量: %zu", 
                 x, y, obstacles_.size());
@@ -150,75 +110,17 @@ void TrajectoryAndObstaclesPublisher::pose_estimate_callback(const geometry_msgs
         msg->pose.pose.orientation.w);
     cur_pose_.z = tf2::getYaw(q);
     std::cout << "pose_estimate_callback " << std::endl;
-    // 2. 触发规划逻辑（新增）
-    if (has_valid_global_path_) {  // 确保已有全局路径
-        needs_replan_ = true;  // 标记需要重新规划
-        if (should_plan_) {
-            RCLCPP_INFO(this->get_logger(), "初始位置更新，触发重新规划！");
-        } else {
-            RCLCPP_WARN(this->get_logger(), "初始位置已更新，但规划未启动！请先发送 /trigger_plan true 启动规划");
-        }
-    } else {
-        RCLCPP_WARN(this->get_logger(), "初始位置已更新，但无有效全局路径，无法规划！");
-    }
+    has_current_pose_ = true;
+    if (has_valid_global_path_) needs_replan_ = true;
 }
 
-// 触发规划话题回调
-void TrajectoryAndObstaclesPublisher::trigger_plan_callback(const std_msgs::msg::Bool::SharedPtr msg)
-{
-    // std::lock_guard<std::mutex> lock(data_mutex_);
-    // if (msg->data && !flag_) {
-    //     if (has_valid_global_path_) {
-    //         should_plan_ = true;
-    //         needs_replan_ = true;  // 设置需要重新规划
-    //         RCLCPP_INFO(this->get_logger(), "规划已触发! 路径点: %zu, 障碍物: %zu", 
-    //                    global_plan_traj_.size(), obstacles_.size());
-    //     } else {
-    //         RCLCPP_WARN(this->get_logger(), "无法触发规划: 没有有效的全局路径!");
-    //     }
-    //     flag_ = msg->data;
-    // } else if(!msg->data && flag_){
-    //     should_plan_ = false;
-    //     needs_replan_ = false;  // 停止时清除重新规划标志
-    //     obstacles_.clear();  // 清除障碍物
-    //     global_plan_traj_.clear();  // 清除路径
-    //     planned_traj.clear();  // 清除规划轨迹
-    //     obstacles_.clear();  // 清除障碍物
-    //     RCLCPP_INFO(this->get_logger(), "规划已停止.");
-    //     flag_ = msg->data;
-    // }
-}
-
-// 处理2D Nav Goal - 生成从起点到目标的直线路
+// 处理2D Nav Goal - 生成障碍物
 void TrajectoryAndObstaclesPublisher::goal_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
     add_obstacle_at_position(msg->pose.position.x, msg->pose.position.y);
 }
 
-// 生成直线路径
-void TrajectoryAndObstaclesPublisher::generate_straight_path(const geometry_msgs::msg::PoseStamped& start, 
-                                                           const geometry_msgs::msg::PoseStamped& goal)
-{
-    global_plan_traj_.clear();
-
-    // 计算路径点数量（每0.1米一个点）
-    double dx = goal.pose.position.x - start.pose.position.x;
-    double dy = goal.pose.position.y - start.pose.position.y;
-    double distance = std::sqrt(dx*dx + dy*dy);
-    int num_points = std::max(2, static_cast<int>(distance / 0.1));
-
-    // 生成直线路径点
-    for (int i = 0; i < num_points; ++i) {
-        double ratio = static_cast<double>(i) / (num_points - 1);
-        PathPoint point;
-        point.x = start.pose.position.x + ratio * dx;
-        point.y = start.pose.position.y + ratio * dy;
-        point.z = 0.0;
-        global_plan_traj_.push_back(point);
-    }
-}
-
-// // 处理Publish Point点击 - 添加障碍物
+// Collect a clicked point as part of the reference path
 void TrajectoryAndObstaclesPublisher::rviz_point_callback(const geometry_msgs::msg::PointStamped::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(data_mutex_);
@@ -231,45 +133,7 @@ void TrajectoryAndObstaclesPublisher::rviz_point_callback(const geometry_msgs::m
     std::cout << "从RViz接收到全局路径点: (" << point.x << ", " << point.y << ")" << std::endl;
     has_valid_global_path_ = true;
     
-    // 如果有路径更新且正在规划中，则标记需要重新规划
-    if (should_plan_) 
-    {
-        needs_replan_ = true;
-        RCLCPP_INFO(this->get_logger(), "路径更新，已标记需要重新规划");
-    }
-}
-
-// 原有的全局路径回调
-void TrajectoryAndObstaclesPublisher::rviz_global_path_callback(const nav_msgs::msg::Path::SharedPtr msg)
-{
-    if (msg->poses.empty())
-    {
-        RCLCPP_WARN(this->get_logger(), "从RViz接收到空的全局路径!");
-        has_valid_global_path_ = false;
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(data_mutex_);
-
-    global_plan_traj_.clear();
-    for (const auto& pose_stamped : msg->poses)
-    {
-        PathPoint path_point;
-        path_point.x = pose_stamped.pose.position.x;
-        path_point.y = pose_stamped.pose.position.y;
-        path_point.z = pose_stamped.pose.position.z;
-        global_plan_traj_.push_back(path_point);
-    }
-
-    has_valid_global_path_ = true;
-    
-    // 如果有路径更新且正在规划中，则标记需要重新规划
-    if (should_plan_) {
-        needs_replan_ = true;
-        RCLCPP_INFO(this->get_logger(), "路径更新，已标记需要重新规划");
-    }
-    
-    RCLCPP_INFO(this->get_logger(), "从RViz接收到全局路径 (大小: %zu)", global_plan_traj_.size());
+    if (has_current_pose_) needs_replan_ = true;
 }
 
 // 核心逻辑：检查数据更新→触发规划→发布结果
@@ -277,10 +141,10 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
 {
     std::lock_guard<std::mutex> lock(data_mutex_);
 
-    // 如果有全局路径且应该规划，并且需要重新规划，则进行规划
-    if (needs_replan_ )//&& has_valid_global_path_ && needs_replan_)
+    // Replan when path, pose, or obstacle data changes.
+    if (needs_replan_ && has_valid_global_path_ && has_current_pose_)
     {
-        a_star_pathes_.clear();
+        search_paths_.clear();
         // 设置全局路径
         if (!global_plan_traj_.empty())
         {
@@ -310,31 +174,52 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             }
             discretize_trajectory(global_plan_traj_after, global_plan_traj_temp, 0.4);
 
-            ego_planner_->setPathPoint(global_plan_traj_temp);
+            planner_->setPathPoint(global_plan_traj_temp);
         }
         // std::cout << "cur_pose_x =" << cur_pose_.x << "cur_pose_y =" << cur_pose_.y << std::endl;
         // Rebuild the XY local map around the current pose on every planning update.
-        ego_planner_->setGridMap(cur_pose_);
-        ego_planner_->setCurrentVehiclePos(cur_pose_);
+        planner_->setGridMap(cur_pose_);
+        planner_->setCurrentVehiclePos(cur_pose_);
         // 设置障碍物
-        ego_planner_->setObstacles(obstacles_);
+        planner_->setObstacles(obstacles_);
 
-        // 触发Ego Planner规划
-        ego_planner_->makePlan();
+        // Retry once only when the planner did not produce a usable trajectory.
+        constexpr int max_plan_attempts = 2;
+        std::vector<PathPoint> planned_result;
+        for (int attempt = 1; attempt <= max_plan_attempts; ++attempt) {
+            const auto plan_start = std::chrono::steady_clock::now();
+            planner_->makePlan();
+            const auto plan_end = std::chrono::steady_clock::now();
+            const auto plan_duration_ms = std::chrono::duration<double, std::milli>(
+                plan_end - plan_start).count();
+            planner_->getLocalPlanTrajResults(planned_result);
+            RCLCPP_INFO(this->get_logger(), "planner_->makePlan() 第 %d 次耗时: %.3f ms，轨迹点: %zu",
+                        attempt, plan_duration_ms, planned_result.size());
+            if (planned_result.size() >= 2) break;
+            if (attempt < max_plan_attempts) {
+                RCLCPP_WARN(this->get_logger(), "首次规划未生成有效轨迹，正在重试一次");
+            }
+        }
 
-        ego_planner_->getAStarPath(a_star_pathes_);
+        planner_->getSearchPath(search_paths_);
 
         if (has_obstacles_) {
-            RCLCPP_INFO(this->get_logger(), "TwoCircleEgo：规划完成! 包含障碍物避让. 路径点: %zu, 障碍物: %zu", 
-                       global_plan_traj_.size(), obstacles_.size());
+            if (planned_result.size() >= 2) {
+                RCLCPP_INFO(this->get_logger(), "规划完成，候选路线: %zu，障碍物: %zu",
+                           search_paths_.size(), obstacles_.size());
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "重试后仍未找到可行轨迹，候选路线: %zu，障碍物: %zu",
+                             search_paths_.size(), obstacles_.size());
+            }
         } else {
-            RCLCPP_INFO(this->get_logger(), "规划完成! 无障碍物. 路径点: %zu", 
-                       global_plan_traj_.size());
+            if (planned_result.size() >= 2) {
+                RCLCPP_INFO(this->get_logger(), "规划完成! 无障碍物. 路径点: %zu",
+                           global_plan_traj_.size());
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "重试后仍未生成有效轨迹");
+            }
         }
         
-        // 规划完成后，重置重新规划标志，但保持 should_plan_ 为 true
-        // 这样下次有数据更新时可以自动重新规划
-        // needs_replan_ = false;
         needs_replan_ = false;
 
     }
@@ -343,14 +228,13 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
     publish_global_path();
     publish_planned_trajectory();
     publish_obstacles();
-    publish_a_star_path();
+    publish_search_path();
     publish_local_obstacles();
 }
 
 // 发布可视化全局路径
 void TrajectoryAndObstaclesPublisher::publish_global_path()
 {
-    // if (global_plan_traj_.empty()) return;
 
     nav_msgs::msg::Path visual_path;
     visual_path.header.stamp = this->now();
@@ -365,7 +249,7 @@ void TrajectoryAndObstaclesPublisher::publish_global_path()
         pose.pose.position.z = path_point.z;
 
         tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, 0.0);
+        q.setRPY(0.0, 0.0, path_point.theta);
         pose.pose.orientation.x = q.x();
         pose.pose.orientation.y = q.y();
         pose.pose.orientation.z = q.z();
@@ -377,22 +261,18 @@ void TrajectoryAndObstaclesPublisher::publish_global_path()
     global_path_pub_->publish(visual_path);
 }
 
-void TrajectoryAndObstaclesPublisher::publish_a_star_path()
+void TrajectoryAndObstaclesPublisher::publish_search_path()
 {
-    // 如果没有路径数据，直接返回
-    if (a_star_pathes_.empty())
-    {
-      RCLCPP_WARN(this->get_logger(), "a_star_pathes_ is empty, no trajectories to publish.");
-      return;
-    }
-
     // 创建一个MarkerArray消息
     visualization_msgs::msg::MarkerArray marker_array_msg;
+    visualization_msgs::msg::Marker clear_marker;
+    clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    marker_array_msg.markers.push_back(clear_marker);
 
-    // 遍历 a_star_pathes_ 中的每一条路径
-    for (size_t i = 0; i < a_star_pathes_.size(); ++i)
+    // 遍历 search_paths_ 中的每一条路径
+    for (size_t i = 0; i < search_paths_.size(); ++i)
     {
-      const std::vector<Eigen::Vector2d>& current_path = a_star_pathes_[i];
+      const std::vector<Eigen::Vector2d>& current_path = search_paths_[i];
 
       // 1. 创建一个Marker对象
       visualization_msgs::msg::Marker marker;
@@ -400,19 +280,19 @@ void TrajectoryAndObstaclesPublisher::publish_a_star_path()
       // 2. 设置Marker的基本信息
       marker.header.frame_id = "map"; // 非常重要！指定轨迹所在的坐标系
       marker.header.stamp = this->get_clock()->now();
-      marker.ns = "a_star_paths"; // 命名空间，用于分组管理Marker
+      marker.ns = "topoprm_candidates";
       marker.id = i;              // 每条路径必须有唯一的ID
       marker.type = visualization_msgs::msg::Marker::LINE_STRIP; // 类型为线串
       marker.action = visualization_msgs::msg::Marker::ADD;      // 动作是添加
 
       // 3. 设置线的视觉属性
-      marker.scale.x = 0.1; // 线宽为0.1米
+      marker.scale.x = 0.06;
 
       // 设置颜色（RGBA格式），每条路径可以设置不同的颜色
-      marker.color.r = 1.0 - (i * 0.3); // 红色分量
-      marker.color.g = 0.2;             // 绿色分量
-      marker.color.b = 0.2 + (i * 0.3); // 蓝色分量
-      marker.color.a = 1.0;             // 透明度（1.0为完全不透明）
+      marker.color.r = 0.05F;
+      marker.color.g = 0.35F + 0.15F * static_cast<float>(i % 3);
+      marker.color.b = 0.7F + 0.25F * static_cast<float>(i % 2);
+      marker.color.a = 1.0F;
 
       // 4. 填充路径点
       for (const auto& eigen_point : current_path)
@@ -420,7 +300,7 @@ void TrajectoryAndObstaclesPublisher::publish_a_star_path()
         geometry_msgs::msg::Point ros_point;
         ros_point.x = eigen_point.x();
         ros_point.y = eigen_point.y();
-        ros_point.z = 0.0; // 2D轨迹，z轴设为0
+        ros_point.z = 0.02;
 
         marker.points.push_back(ros_point);
       }
@@ -430,16 +310,16 @@ void TrajectoryAndObstaclesPublisher::publish_a_star_path()
     }
 
     // 6. 发布MarkerArray消息
-    a_star_path_pub_->publish(marker_array_msg);
-    // RCLCPP_INFO(this->get_logger(), "a_star_path_pub_ Published %zu trajectories.", a_star_pathes_.size());
+    search_path_pub_->publish(marker_array_msg);
+    // RCLCPP_INFO(this->get_logger(), "search_path_pub_ Published %zu trajectories.", search_paths_.size());
 
 }
 
-// 发布Ego Planner规划后的局部轨迹
+// Publish the planned local trajectory
 void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
 {
     planned_traj.clear();
-    ego_planner_->getLocalPlanTrajResults(planned_traj);
+    planner_->getLocalPlanTrajResults(planned_traj);
 
     // if (planned_traj.empty()) return;
 
@@ -454,10 +334,10 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         pose.header = visual_traj.header;
         pose.pose.position.x = planned_traj[i].x;
         pose.pose.position.y = planned_traj[i].y;
-        pose.pose.position.z = planned_traj[i].z;
+        pose.pose.position.z = 0.05;
 
         tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, 0.0);
+        q.setRPY(0.0, 0.0, planned_traj[i].theta);
         pose.pose.orientation.x = q.x();
         pose.pose.orientation.y = q.y();
         pose.pose.orientation.z = q.z();
@@ -504,7 +384,7 @@ void TrajectoryAndObstaclesPublisher::publish_obstacles()
 void TrajectoryAndObstaclesPublisher::publish_local_obstacles()
 {
     std::vector<ObstacleInfo> obstacles;
-    ego_planner_->getObstacles(obstacles);
+    planner_->getObstacles(obstacles);
 
     if (obstacles.empty()) return;
 
@@ -601,8 +481,7 @@ void TrajectoryAndObstaclesPublisher::discretize_trajectory(const std::vector<Pa
         }
     }
 
-    // 按离散轨迹的前进方向估计航向角，单位为弧度，范围 [-pi, pi]。
-    // 末点沿用最后一段的航向；只有一个点时没有几何方向，取 0。
+    // Estimate each point's forward heading from the next segment.
     double heading = 0.0;
     for (size_t i = 0; i + 1 < discrete_trajectory.size(); ++i) {
         const double dx = discrete_trajectory[i + 1].x - discrete_trajectory[i].x;
@@ -611,6 +490,47 @@ void TrajectoryAndObstaclesPublisher::discretize_trajectory(const std::vector<Pa
             heading = std::atan2(dy, dx);
         }
         discrete_trajectory[i].theta = static_cast<float>(heading);
+    }
+
+    // A single final segment is sensitive to discretization and tiny endpoint
+    // errors. Estimate terminal heading from a short window of the final path
+    // points by fitting x(s) and y(s) against cumulative path distance.
+    if (discrete_trajectory.size() >= 2) {
+        constexpr size_t kHeadingWindowPoints = 5;
+        const size_t begin = discrete_trajectory.size() > kHeadingWindowPoints
+                                 ? discrete_trajectory.size() - kHeadingWindowPoints
+                                 : 0;
+        std::vector<double> arc_length(1, 0.0);
+        arc_length.reserve(discrete_trajectory.size() - begin);
+        for (size_t i = begin + 1; i < discrete_trajectory.size(); ++i) {
+            const double dx = discrete_trajectory[i].x - discrete_trajectory[i - 1].x;
+            const double dy = discrete_trajectory[i].y - discrete_trajectory[i - 1].y;
+            arc_length.push_back(arc_length.back() + std::hypot(dx, dy));
+        }
+
+        const size_t count = arc_length.size();
+        double mean_s = 0.0;
+        double mean_x = 0.0;
+        double mean_y = 0.0;
+        for (size_t i = 0; i < count; ++i) {
+            mean_s += arc_length[i];
+            mean_x += discrete_trajectory[begin + i].x;
+            mean_y += discrete_trajectory[begin + i].y;
+        }
+        mean_s /= count;
+        mean_x /= count;
+        mean_y /= count;
+
+        double direction_x = 0.0;
+        double direction_y = 0.0;
+        for (size_t i = 0; i < count; ++i) {
+            const double centered_s = arc_length[i] - mean_s;
+            direction_x += centered_s * (discrete_trajectory[begin + i].x - mean_x);
+            direction_y += centered_s * (discrete_trajectory[begin + i].y - mean_y);
+        }
+        if (std::hypot(direction_x, direction_y) > 1e-8) {
+            heading = std::atan2(direction_y, direction_x);
+        }
     }
     discrete_trajectory.back().theta = static_cast<float>(heading);
 }

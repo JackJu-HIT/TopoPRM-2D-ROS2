@@ -1,30 +1,25 @@
-# Two-Circle-EGO-Planner-2D-ROS2
+# TopoPRM-2D-ROS2
 
 [![ROS2](https://img.shields.io/badge/ROS2-Humble-blue.svg)](https://docs.ros.org/en/humble/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 [![C++](https://img.shields.io/badge/Language-C++17-orange.svg)](CMakeLists.txt)
 
-面向地面移动机器人的二维局部轨迹规划工程。基于 **Ego-Planner-2D-ROS2**，参考 **SCAN-Planner-Pure-ROS2** 的地图查询方式，引入沿车体航向分布的前后双圆碰撞模型，并在 B 样条优化中加入曲率软约束。
+面向地面移动机器人的 ROS 2 二维局部轨迹规划工程。TopoPRM 在二维占据地图中搜索多条拓扑不同的避障路线，发布所有有效候选，并将其中长度最短的一条作为最优规划轨迹。若 TopoPRM 随机采样未找到有效路线，则使用膨胀栅格上的 A* 搜索进行一次兜底。
 
-核心优化变量为二维控制点的 `x、y`；ROS 2 节点提供 RViz 交互输入与规划结果可视化。ROS 包名仍为 `ego_planner`，可执行文件为 `motion_plan`。
+ROS 2 节点提供 RViz 交互输入与规划结果可视化。GitHub 项目目录名为 `TopoPRM-2D-ROS2`，ROS 包名为 `topoprm_2d`，可执行文件为 `motion_plan`。
 
-## 仿真效果
+## 规划效果
 
-![双圆 EGO-Planner 二维规划仿真效果](pic/result.png)
-
-[▶ 查看仿真视频（MP4）](pic/results.mp4)
-
-视频文件位于 `pic/results.mp4`，若仓库页面无法直接播放，可下载后用本地播放器打开。
+![TopoPRM-2D-ROS2 规划结果](src/result.png)
 
 ## 核心功能
 
 - **二维地图**：原始占据层与圆形膨胀层，局部地图随当前车体位置重建。
-- **双圆车体模型**：前后圆共用半径，前偏移和后偏移独立设置，碰撞查询考虑航向。
-- **二维 A\***：在膨胀地图上生成几何引导路径，供反弹优化构造避障约束。
-- **B 样条优化**：包含平滑、避障、速度/加速度可行性代价，以及精修阶段的参考路径拟合代价。
-- **曲率软约束**：在实际三次 B 样条上采样计算曲率，代价与解析梯度接入反弹、精修两个阶段。
-- **离散路径航向估计**：由相邻离散点的 `atan2(dy, dx)` 计算 `PathPoint.theta`，单位为弧度，末点沿用最后一段方向。
-- **RViz 可视化**：显示参考路径、A* 引导路径、局部轨迹、原始障碍物及膨胀障碍物。
+- **单圆碰撞模型**：以车辆参考点为中心进行圆形膨胀与碰撞检查。
+- **TopoPRM 前端**：构建拓扑路线图，对候选路线执行缩短、同伦类别筛选和占据栅格碰撞复核；为交互运行限制采样时间和候选数。
+- **最优路线输出**：候选路线按长度排序，最短的无碰撞路线作为 `/visual_local_trajectory`。
+- **RViz 可视化**：`/trajectories` 显示所有有效候选路线，绿色 `/visual_local_trajectory` 显示最优路线；同时显示参考路径和障碍物。
+- **失败处理与计时**：TopoPRM 无有效路线时使用膨胀栅格 A* 兜底；一次规划未生成轨迹时自动重试一次，并在 ROS 日志中打印每次耗时。
 
 当前仓库提供规划与可视化节点、Launch 一键启动文件及预置 `rviz.rviz` 配置，不包含小车动力学仿真或轨迹跟踪控制器。
 
@@ -34,9 +29,9 @@
 
 已在 ROS 2 Humble 环境完成编译验证。其他 ROS 2 发行版尚未验证。
 
-需要 CMake 3.22 或更新版本、支持 C++17 的编译器、Eigen3、Boost，以及以下 ROS 2 依赖：
+需要 CMake 3.22 或更新版本、支持 C++17 的编译器、Eigen3，以及以下 ROS 2 依赖：
 
-`ament_cmake`、`rclcpp`、`nav_msgs`、`geometry_msgs`、`std_msgs`、`sensor_msgs`、`visualization_msgs`、`tf2`、`tf2_ros`。
+`ament_cmake`、`rclcpp`、`nav_msgs`、`geometry_msgs`、`sensor_msgs`、`visualization_msgs`、`tf2`、`tf2_ros`。
 
 一键启动还需要 `launch`、`launch_ros` 和 `rviz2`。
 
@@ -46,7 +41,7 @@
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --packages-select ego_planner
+colcon build --packages-select topoprm_2d
 source install/setup.bash
 ```
 
@@ -57,7 +52,7 @@ source install/setup.bash
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch ego_planner demo.launch.py
+ros2 launch topoprm_2d demo.launch.py
 ```
 
 该命令同时启动 `motion_plan` 规划节点和 RViz，并自动加载随包安装的 `rviz.rviz`。配置已设置 **Fixed Frame = map** 和规划显示项，无需手动添加；按 `Ctrl+C` 结束本次启动的两个进程。
@@ -67,7 +62,7 @@ ros2 launch ego_planner demo.launch.py
 也可指定自己的 RViz 配置：
 
 ```bash
-ros2 launch ego_planner demo.launch.py rviz_config:=/absolute/path/to/custom.rviz
+ros2 launch topoprm_2d demo.launch.py rviz_config:=/absolute/path/to/custom.rviz
 ```
 
 ### 分别启动（可选）
@@ -82,13 +77,13 @@ source install/setup.bash
 终端 1：
 
 ```bash
-ros2 run ego_planner motion_plan
+ros2 run topoprm_2d motion_plan
 ```
 
 终端 2：
 
 ```bash
-rviz2 -d "$(ros2 pkg prefix --share ego_planner)/rviz.rviz"
+rviz2 -d "$(ros2 pkg prefix --share topoprm_2d)/rviz.rviz"
 ```
 
 预置配置中的主要显示项如下：
@@ -97,8 +92,8 @@ rviz2 -d "$(ros2 pkg prefix --share ego_planner)/rviz.rviz"
 | --- | --- | --- |
 | Grid | — | 平面网格 |
 | Path | `/visual_global_path` | 全局参考路径 |
-| MarkerArray | `/trajectories` | A* 引导路径 |
-| Path | `/visual_local_trajectory` | 优化后的局部轨迹 |
+| MarkerArray | `/trajectories` | 所有有效 TopoPRM 候选路线 |
+| Path | `/visual_local_trajectory` | 长度最短的有效路线（最优路线） |
 | PointCloud2 | `/visual_obstacles` | 原始障碍物 |
 | PointCloud2 | `/visual_local_obstacles` | 局部地图膨胀结果 |
 
@@ -108,105 +103,55 @@ rviz2 -d "$(ros2 pkg prefix --share ego_planner)/rviz.rviz"
 
 1. 使用 **Publish Point**（`/clicked_point`）依次添加参考路径点，至少添加两个不同位置的点。
 2. 使用 **2D Goal Pose**（`/goal_pose`）添加障碍物；可添加多个，也可以先测试无障碍路径。
-3. 使用 **2D Pose Estimate**（`/initialpose`）设置机器人起点与航向。在已有参考路径后，该操作会标记需要规划。
-4. 在 RViz 中查看规划结果。修改路径或障碍物后，再发送一次 **2D Pose Estimate** 触发更新。
+3. 使用 **2D Pose Estimate**（`/initialpose`）设置机器人起点与航向；已有参考路径时会触发规划。
+4. 在 RViz 中查看规划结果。设置当前位置后，继续添加路径点或障碍物也会触发重规划。
 
 参考路径点击会追加点，障碍物点击也会追加障碍物。当前未提供清空话题，需要重新开始场景时可重启节点。
 
-`/trigger_plan` 虽然创建了订阅，但回调中的启动/停止逻辑目前全部被注释，因此发送该话题不会控制规划。节点启动日志中的部分工具提示与此不一致，请以上述流程为准。
+## 单圆车体碰撞模型
 
-## 双圆车体碰撞模型
-
-地图借鉴 SCAN 的原始/膨胀占据层和前后双圆柱查询，将空间维度保留为 XY，圆柱退化为圆。地图不建立 Z 栅格，也不计算 ESDF；输入障碍物只使用 XY 坐标。
-
-设车体参考点为 `position`，航向为 `yaw`，两个圆心为：
+规划器以车辆参考点为圆心，将 `vehicle.circle_radius` 作为障碍膨胀半径进行碰撞检查。地图只处理 XY 平面，不建立 Z 栅格，也不计算 ESDF；输入障碍物只使用 XY 坐标。
 
 ```text
-heading = [cos(yaw), sin(yaw)]
-front   = position + front_offset * heading
-rear    = position - rear_offset  * heading
+collision_center = vehicle_reference_position
+collision_radius = vehicle.circle_radius
 ```
 
-查询采用与 SCAN 相同的顺序：先检查前圆心在膨胀层中的状态，前圆空闲时再检查后圆。任一圆碰撞即视为车体碰撞。前后偏移可以不同，参考点不要求位于两个圆心的中点。
+圆半径直接作为占据膨胀半径。栅格膨胀按栅格方形间的最小距离计算，以覆盖离散误差；地图外及非有限输入按非空闲区域处理。实际使用时应根据车体外形和所需安全余量设置参数。默认值用于演示，并不对应特定车型。
 
-圆半径直接作为障碍物膨胀半径，不再额外叠加一次车体半径。实现按栅格方形间的最小距离保守膨胀，计入栅格离散误差；地图外、非有限输入以及圆轮廓越出地图边界均按非空闲处理。
+### TopoPRM 拓扑搜索
 
-### 车体尺寸配置
-
-前后偏移均为非负距离：前偏移沿航向，后偏移沿反航向。两者均为 0 时退化为单圆。
-
-若参考点位于长 `L`、宽 `W` 的矩形几何中心，可用以下双圆覆盖矩形：
-
-```text
-front_offset = rear_offset = L / 4
-radius = sqrt((L / 4)^2 + (W / 2)^2)
-```
-
-实际使用时应根据定位参考点、车体外形和所需余量设置参数。默认值用于演示，并不对应特定车型。
-
-### 优化器中的使用方式
-
-初始碰撞分段、反弹检查、反弹基点搜索均使用带航向的双圆查询。控制点航向由相邻控制点估计，轨迹检查航向由相邻采样点估计；退化时使用当前车体航向。
-
-A* 使用单圆膨胀层提供二维几何引导，没有独立的航向搜索维度。优化器也没有独立的 yaw 优化变量。
-
-反弹和精修沿用 SCAN 的内联碰撞检查：检查轨迹前 **2/3**，按首尾距离和地图分辨率计算采样间隔。该检查不覆盖整条轨迹，也不是连续碰撞检测。
-
-## 曲率软约束
-
-`calKappaCost` 在实际均匀三次 B 样条上计算曲率：
-
-```text
-kappa = (x' * y'' - y' * x'') / (x'^2 + y'^2)^(3/2)
-penalty = max(0, abs(kappa) - max_curvature)^2
-```
-
-每个节点区间取 5 个样本（含两端），将解析梯度分配到对应的 4 个控制点。左右转弯使用同一绝对曲率上限。曲率代价及梯度加入反弹、精修两阶段的目标，权重仅乘一次。
-
-计算采用归一化节点坐标下的空间导数，单纯调整轨迹时间不会降低曲率代价。分母加入正则化，避免重复控制点或接近静止时出现除零。静止点的几何曲率本身无定义，这一处理不保证原地尖点或折返的运动学可行性。
-
-这是**采样软约束**：允许与其他代价权衡，不保证所有采样点或采样点之间严格低于曲率上限。固定首尾控制点、障碍物与曲率限制也可能互相冲突；上限过严或权重过大可能导致求解不收敛。
+TopoPRM 从当前起点到参考路径终点构建拓扑路线图，搜索并筛选多条路线。所有候选都会再通过膨胀占据地图的离散碰撞检查；剩余路线按长度排序，最短路线作为最优结果。算法输出的是几何路径，不显式搜索速度状态。
 
 ## ROS 2 参数
 
-下列参数在节点启动时读取，当前没有动态参数更新回调。
+节点启动时读取单圆碰撞半径：
 
-| 参数 | 默认值 | 单位/含义 |
+| 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `vehicle.circle_radius` | **0.4** | m，两个圆共用的半径 |
-| `vehicle.front_circle_offset` | 0.5 | m，参考点到前圆心的距离 |
-| `vehicle.rear_circle_offset` | 0.5 | m，参考点到后圆心的距离 |
-| `optimization.max_curvature` | 2.0 | m⁻¹，绝对曲率上限，可按最小转弯半径 `R` 设置为 `1/R` |
-| `optimization.curvature_weight` | 0.1 | 曲率惩罚权重，0 表示关闭 |
+| `vehicle.circle_radius` | 0.4 m | 车辆参考点周围的单圆碰撞半径 |
 
-配置示例：
+示例：
 
 ```bash
-ros2 run ego_planner motion_plan --ros-args \
-  -p vehicle.circle_radius:=0.5 \
-  -p vehicle.front_circle_offset:=0.4 \
-  -p vehicle.rear_circle_offset:=0.3 \
-  -p optimization.max_curvature:=1.0 \
-  -p optimization.curvature_weight:=1.0
+ros2 run topoprm_2d motion_plan --ros-args \
+  -p vehicle.circle_radius:=0.5
 ```
 
-优化日志中的 `curvature` 为加权后的曲率代价。值为 0 可能表示当前样本未超限，也可能是权重被设为 0。
-
-地图 XY 尺寸、分辨率和其他运动参数仍在源码中配置，尚未全部暴露为 ROS 参数。当前节点的地图默认尺寸为 `50 × 50 m`，分辨率为 `0.1 m`。节点层运动参数与优化器内部限制分别设置，修改时需核对两处。
+地图尺寸、分辨率和 TopoPRM 的采样上限仍在源码中配置。
 
 ## 话题接口
 
-节点名为 `ego_planner_interactive_node`。下表使用默认命名空间下的话题名。
+节点名为 `topoprm_2d_interactive_node`。下表使用默认命名空间下的话题名。
 
 | 方向 | 话题 | 消息类型 | 用途 |
 | --- | --- | --- | --- |
 | 订阅 | `/clicked_point` | `geometry_msgs/msg/PointStamped` | 追加参考路径点 |
 | 订阅 | `/goal_pose` | `geometry_msgs/msg/PoseStamped` | 追加障碍物，使用位置 XY |
 | 订阅 | `/initialpose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | 更新车体起点、航向并触发重规划 |
-| 订阅 | `/trigger_plan` | `std_msgs/msg/Bool` | 当前回调无有效逻辑 |
 | 发布 | `/visual_global_path` | `nav_msgs/msg/Path` | 参考路径 |
-| 发布 | `/trajectories` | `visualization_msgs/msg/MarkerArray` | A* 引导路径 |
-| 发布 | `/visual_local_trajectory` | `nav_msgs/msg/Path` | 规划轨迹 |
+| 发布 | `/trajectories` | `visualization_msgs/msg/MarkerArray` | 所有有效 TopoPRM 候选路线 |
+| 发布 | `/visual_local_trajectory` | `nav_msgs/msg/Path` | 最短有效路线，即最优路线 |
 | 发布 | `/visual_obstacles` | `sensor_msgs/msg/PointCloud2` | 原始障碍物 |
 | 发布 | `/visual_local_obstacles` | `sensor_msgs/msg/PointCloud2` | 膨胀障碍物 |
 
@@ -220,26 +165,23 @@ ros2 run ego_planner motion_plan --ros-args \
 ├── package.xml
 ├── launch/demo.launch.py                 # 一键启动规划节点与 RViz
 ├── rviz.rviz                             # RViz 预置配置
-├── pic/
-│   ├── result.png                        # 仿真图片
-│   └── results.mp4                       # 仿真视频
 ├── include/trajectory_obstacles_publisher.h
 ├── src/trajectory_publisher.cpp           # ROS2 交互、参数、发布及路径离散
 └── planner/
-    ├── GridMap2D/                         # 二维地图与双圆查询
-    ├── path_searching/                    # 二维 A* 几何引导
-    ├── bspline_opt/                       # B 样条、L-BFGS 与各项代价
-    └── plan_manage/                       # 规划流程与接口
+    ├── GridMap2D/                         # 二维地图与单圆碰撞查询
+    ├── path_searching/                    # TopoPRM 拓扑路线搜索
+    └── plan_manage/                       # 规划流程与 ROS 接口
 ```
 
 
 ## 参考与致谢
 
+- [HKUST-Aerial-Robotics/Fast-Planner](https://github.com/HKUST-Aerial-Robotics/Fast-Planner)：感谢 Fast-Planner 团队开源分享，TopoPRM 前端的实现参考其拓扑路线搜索。
 - [ZJU-FAST-Lab/ego-planner](https://github.com/ZJU-FAST-Lab/ego-planner)：原始 EGO-Planner 算法。
-- [JackJu-HIT/Ego-Planner-2D-ROS2](https://github.com/JackJu-HIT/Ego-Planner-2D-ROS2)：本项目的二维 ROS 2 基础工程，也是当前 Git remote 指向的仓库。
+- [JackJu-HIT/Ego-Planner-2D-ROS2](https://github.com/JackJu-HIT/Ego-Planner-2D-ROS2)：本项目改造所基于的二维 ROS 2 工程。
 -  [JackJu-HIT/SCAN-Planner-Pure-ROS2](https://github.com/JackJu-HIT/SCAN-Planner-Pure-ROS2)：局部占据地图与沿航向前后偏移查询的参考实现。
 
-本文标题使用 `Two-Circle-EGO-Planner-ROS2` 标识双圆版本；ROS 包名和远程仓库地址未随标题修改。用于二次开发或论文时，请注明所使用的仓库地址与版本，并保留上游署名。
+本项目由 Two-Circle-EGO-Planner-2D-ROS2 改造而来，前端拓扑搜索参考并移植自 `standalone_planner/topoprm_2d`。用于二次开发或论文时，请注明所使用的仓库地址与版本，并保留上游署名。
 
 ## 作者与交流
 
@@ -248,10 +190,10 @@ ros2 run ego_planner motion_plan --ros-args \
 - 微信公众号：**机器人规划与控制研究所**。[相关技术文章](https://mp.weixin.qq.com/s/tjHMyyEMzsonYaVbrq4WTQ)
 - Bilibili：**机器人算法研究所**。[原项目演示视频](https://www.bilibili.com/video/BV11RUfB8ELb/)
 
-以上链接沿用基础项目资料，不代表本双圆版本的验证记录。
+以上链接沿用基础项目资料，不代表本项目的性能验证记录。
 
 ## 许可证
 
-项目采用 [MIT License](LICENSE)，使用、修改与分发请遵循许可证并保留版权声明。
+项目主体采用 [Apache License 2.0](LICENSE)。TopoPRM 源文件保留 Fast-Planner 的 LGPL-3.0-or-later 版权与许可声明；使用、修改和分发时请同时遵守相应文件中的上游许可证要求。
 
-*文档更新：2026-09-20*
+*文档更新：2026-11-01*
